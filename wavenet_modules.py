@@ -78,45 +78,52 @@ class DilatedQueue:
 
 
 class ConstantPad1d(Function):
-    def __init__(self, target_size, dimension=0, value=0, pad_start=False):
-        super(ConstantPad1d, self).__init__()
-        self.target_size = target_size
-        self.dimension = dimension
-        self.value = value
-        self.pad_start = pad_start
+    """This class was modified from the original on 2/10/24 using ChatGPT v3.5
+    to resolve runtime error related to pytorch autograd function deprecation."""
 
-    def forward(self, input):
-        self.num_pad = self.target_size - input.size(self.dimension)
-        assert self.num_pad >= 0, 'target size has to be greater than input size'
+    @staticmethod
+    def forward(ctx, input, target_size, dimension=0, value=0, pad_start=False):
+        num_pad = target_size - input.size(dimension)
+        assert num_pad >= 0, 'target size has to be greater than input size'
 
-        self.input_size = input.size()
+        input_size = input.size()
 
-        size = list(input.size())
-        size[self.dimension] = self.target_size
-        output = input.new(*tuple(size)).fill_(self.value)
+        size = list(input_size)
+        size[dimension] = target_size
+        output = input.new(*tuple(size)).fill_(value)
         c_output = output
 
         # crop output
-        if self.pad_start:
-            c_output = c_output.narrow(self.dimension, self.num_pad, c_output.size(self.dimension) - self.num_pad)
+        if pad_start:
+            c_output = c_output.narrow(dimension, num_pad, c_output.size(dimension) - num_pad)
         else:
-            c_output = c_output.narrow(self.dimension, 0, c_output.size(self.dimension) - self.num_pad)
+            c_output = c_output.narrow(dimension, 0, c_output.size(dimension) - num_pad)
 
         c_output.copy_(input)
+
+        ctx.save_for_backward(input.clone())
+        ctx.dimension = dimension
+        ctx.num_pad = num_pad
+        ctx.pad_start = pad_start
+
         return output
 
-    def backward(self, grad_output):
-        grad_input = grad_output.new(*self.input_size).zero_()
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        grad_input = grad_output.new(*input.size()).zero_()
         cg_output = grad_output
 
         # crop grad_output
-        if self.pad_start:
-            cg_output = cg_output.narrow(self.dimension, self.num_pad, cg_output.size(self.dimension) - self.num_pad)
+        if ctx.pad_start:
+            cg_output = cg_output.narrow(ctx.dimension, ctx.num_pad, cg_output.size(ctx.dimension) - ctx.num_pad)
         else:
-            cg_output = cg_output.narrow(self.dimension, 0, cg_output.size(self.dimension) - self.num_pad)
+            cg_output = cg_output.narrow(ctx.dimension, 0, cg_output.size(ctx.dimension) - ctx.num_pad)
 
         grad_input.copy_(cg_output)
-        return grad_input
+
+        return grad_input, None, None, None, None
+
 
 
 def constant_pad_1d(input,
